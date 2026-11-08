@@ -126,6 +126,8 @@ button{font:inherit;color:inherit}
 .fix .acts{margin-top:2px}
 .sys{align-self:center;max-width:94%;background:var(--accent-soft);border-radius:14px;padding:10px 14px;font-size:14px;display:flex;flex-direction:column;gap:8px;overflow-wrap:anywhere}
 .sys .row{display:flex;gap:8px;flex-wrap:wrap}
+.sys .meta{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.sys.banner{align-self:stretch;max-width:none;background:var(--teal-soft)}
 .typing{display:inline-flex;gap:5px;padding:4px 2px}
 .typing i{width:7px;height:7px;border-radius:50%;background:var(--muted);animation:dot 1s infinite ease-in-out}
 .typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
@@ -189,6 +191,12 @@ dialog.dlg::backdrop{background:rgb(8 16 26 / .5)}
 .err{color:var(--bad);font-weight:600}
 .section-title{margin:6px 0 -4px;font:600 11px var(--font-body);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .howto{margin:0;padding-left:20px;font-size:13.5px;display:flex;flex-direction:column;gap:4px}
+.ver{text-align:right;font-variant-numeric:tabular-nums}
+.speed{display:flex;flex-direction:column;gap:2px;margin-top:6px}
+.speed-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:5px 0;border-bottom:1px dashed var(--line);font-variant-numeric:tabular-nums}
+.speed-row .sm-name{min-width:0;overflow-wrap:anywhere;color:var(--ink)}
+.speed-row .sm-val{flex:none;max-width:55%;text-align:right;overflow-wrap:anywhere}
+.speed>.ok,.speed>.err{margin-top:6px}
 
 /* Luyện nói */
 .target{font-size:22px;line-height:1.45;font-weight:500;margin:0;overflow-wrap:anywhere}
@@ -271,8 +279,9 @@ dialog.dlg::backdrop{background:rgb(8 16 26 / .5)}
     </div>
     <div class="field">
       <label for="fModel">Model</label>
-      <div class="inline"><select id="fModel" style="flex:1;min-width:0"></select><button class="btn ghost sm" type="button" id="btnCheck">Kiểm tra key</button></div>
+      <div class="inline"><select id="fModel" style="flex:1 1 100%;min-width:0"></select><button class="btn ghost sm" type="button" id="btnCheck">Kiểm tra key</button><button class="btn ghost sm" type="button" id="btnSpeed">Kiểm tra tốc độ</button></div>
       <div class="help" id="checkMsg"></div>
+      <div class="help" id="speedOut" hidden></div>
     </div>
 
     <p class="section-title">Cách xưng hô</p>
@@ -301,12 +310,13 @@ dialog.dlg::backdrop{background:rgb(8 16 26 / .5)}
 
     <p class="section-title">Dùng trên điện thoại</p>
     <ol class="howto">
-      <li>Mở link của app bằng Chrome (Android) hoặc Safari (iPhone).</li>
+      <li>Mở link của app bằng Chrome (Android) hoặc Safari (iPhone), không mở trong Zalo hay Messenger.</li>
       <li>Mở menu chia sẻ hoặc menu ⋮, chọn <b>Thêm vào màn hình chính</b>.</li>
       <li>Lần đầu bấm micro, chọn <b>Cho phép</b> dùng micro.</li>
       <li>Trong lúc chờ UFO trả lời, giữ app mở, không khoá màn hình.</li>
     </ol>
     <p class="note">Lưu ý: với gói miễn phí, Google có thể dùng nội dung trò chuyện để cải thiện sản phẩm. Không nên nhắc thông tin nội bộ công ty (giá, khách hàng, số liệu) khi luyện với UFO.</p>
+    <p class="note ver" id="appVer"></p>
   </div>
   <div class="dlg-foot">
     <button class="btn ghost" type="button" data-close>Huỷ</button>
@@ -408,6 +418,8 @@ function toast(msg, ms){
 }
 function mkErr(code, msg){ const e = new Error(msg); e.code = code; return e; }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const fmtSec = ms => (ms / 1000).toFixed(1).replace('.', ',') + ' giây';
+const verOf = id => parseFloat((String(id).match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || 0);
 
 /* ================= Dữ liệu cố định ================= */
 const LEVELS = {
@@ -442,12 +454,15 @@ const TOPICS = {
       sugg:[{en:'I work in operations at a restaurant company.', vi:'Tôi làm mảng vận hành ở một công ty nhà hàng.'},{en:"I've been in this job for three years.", vi:'Tôi đã làm công việc này được ba năm.'}] } }
 };
 const DEFAULTS = { apiKey:'', model:'gemini-flash-latest', name:'', addr:'anh', self:'em', level:'basic', topic:'free',
-  voiceURI:'', rate:0.95, autoSpeak:true, autoSend:true, showVi:'tap', theme:'auto', think:{} };
+  voiceURI:'', rate:0.95, autoSpeak:true, autoSend:true, showVi:'tap', theme:'auto', think:{}, noStream:false };
 const API = 'https://generativelanguage.googleapis.com/v1beta';
+const APP_VERSION = '1.2 (08/11/2026)';
 const MAX_MSGS = 80, HISTORY_TURNS = 16, TIMEOUT_MS = 50000;
-const MODEL_HELP = 'Để mặc định "gemini-flash-latest" là được. Nếu UFO vẫn trả lời chậm, chọn model có chữ Flash-Lite: nhanh hơn, câu trả lời đơn giản hơn.';
+const FIRST_TEXT_MS = 20000;   // quá thời gian này mà Google chưa gửi gì về thì coi là đang chậm
+const MODEL_HELP = 'Để mặc định "gemini-flash-latest" là được. Nếu UFO trả lời chậm, bấm "Kiểm tra tốc độ": app đo thử và tự chọn cách nhanh nhất.';
 /* Các cách giảm "suy nghĩ" của Gemini, thử lần lượt vì mỗi đời model nhận một kiểu khác nhau */
 const THINK_LADDER = [{ thinkingLevel:'minimal' }, { thinkingLevel:'low' }, { thinkingBudget:0 }, null];
+const IN_APP = /Zalo|FBAN|FBAV|FB_IAB|Messenger|Instagram|Line\/|TikTok|musical_ly/i.test(navigator.userAgent || '');
 
 /* ================= Trạng thái ================= */
 let S = Object.assign({}, DEFAULTS, store.get('ufo.settings', {}));
@@ -457,7 +472,7 @@ if (!S.think || typeof S.think !== 'object') S.think = {};
 let chat = store.get('ufo.chat', null);
 let words = store.get('ufo.words', []);
 let models = store.get('ufo.models', []);
-let busy = false, pending = null, micLang = 'en', viOpen = new Set();
+let busy = false, pending = null, micLang = 'en', viOpen = new Set(), bannerClosed = false;
 let streamReply = '', waitStart = 0, waitTimer = null;
 const saveS = () => store.set('ufo.settings', S);
 const saveChat = () => store.set('ufo.chat', chat);
@@ -478,6 +493,7 @@ document.querySelectorAll('dialog').forEach(d => d.addEventListener('click', e =
 $('#prMic').innerHTML = IC.mic;
 $('#prListen').innerHTML = IC.speak + 'Nghe mẫu';
 $('#prSlow').innerHTML = IC.slow + 'Nghe chậm';
+$('#appVer').textContent = 'Phiên bản ' + APP_VERSION;
 
 function applyTheme(){
   const r = document.documentElement;
@@ -537,7 +553,7 @@ const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
 const REC_ERR = {
   'not-allowed':'Trình duyệt chưa cho phép dùng micro. Bấm biểu tượng ổ khoá cạnh thanh địa chỉ để cho phép, hoặc mở app qua link https.',
-  'service-not-allowed':'Trình duyệt chưa cho phép nhận giọng nói. Thử mở bằng Chrome hoặc Edge qua link https.',
+  'service-not-allowed':'Trình duyệt chưa cho phép nhận giọng nói. Thử mở bằng Chrome hoặc Safari qua link https.',
   'no-speech':'Chưa nghe thấy gì. Bấm micro rồi nói to, rõ hơn nhé.',
   'audio-capture':'Không tìm thấy micro trên thiết bị.',
   'network':'Nhận giọng nói cần có internet. Kiểm tra kết nối rồi thử lại.',
@@ -614,36 +630,56 @@ function parseJSON(text){
   if (a >= 0 && b > a){ try { return JSON.parse(t.slice(a, b + 1)); } catch (e) {} }
   return { reply: t };
 }
-/* Gọi Gemini dạng "stream" (nhận chữ dần dần): câu nói của UFO nằm đầu JSON nên hiện và đọc được ngay,
-   phần sửa lỗi / gợi ý / từ mới về sau. opts = { schema, think, onReply } */
+/* Gọi Gemini. Mặc định dạng "stream" (nhận chữ dần dần): câu nói của UFO nằm đầu JSON nên hiện và đọc được ngay.
+   opts = { model, key, stream, schema, think, onReply, firstTextMs } */
 async function gemini(contents, opts){
-  const model = (S.model || 'gemini-flash-latest').replace(/^models\//, '');
+  const model = (opts.model || S.model || 'gemini-flash-latest').replace(/^models\//, '');
+  const key = opts.key || S.apiKey;
+  const stream = opts.stream !== false;
   const gc = { temperature:0.8, responseMimeType:'application/json' };
   if (opts.schema) gc.responseSchema = SCHEMA;
   if (opts.think) gc.thinkingConfig = opts.think;
   const body = { systemInstruction:{ parts:[{ text: systemPrompt() }] }, contents, generationConfig: gc };
+  const firstMs = opts.firstTextMs || FIRST_TEXT_MS;
   const ctl = new AbortController();
-  let timedOut = false;
+  let timedOut = false, slow = false, gotData = false;
   const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, TIMEOUT_MS);
+  const firstTimer = setTimeout(() => { if (!gotData){ slow = true; ctl.abort(); } }, firstMs);
+  const done = () => { clearTimeout(timer); clearTimeout(firstTimer); };
   const t0 = Date.now();
   const detail = e => ' (sau ' + Math.round((Date.now() - t0) / 1000) + ' giây' + (e && e.message ? ' · ' + e.message : '') + ')';
-  const timeoutErr = () => mkErr('timeout', 'Google phản hồi quá lâu (hơn ' + Math.round(TIMEOUT_MS / 1000) + ' giây). Bấm Thử lại. Nếu lặp lại nhiều lần, vào Cài đặt chọn model có chữ Flash-Lite.');
+  const slowErr = () => mkErr('slow', 'Model "' + model + '" chưa trả lời sau ' + Math.round(firstMs / 1000) + ' giây.');
+  const timeoutErr = () => mkErr('timeout', 'Google phản hồi quá lâu (hơn ' + Math.round(TIMEOUT_MS / 1000) + ' giây). Bấm Thử lại.');
+  const failErr = (e, what) => slow ? slowErr() : timedOut ? timeoutErr() : mkErr('network', what + detail(e) + '. Kiểm tra mạng rồi bấm Thử lại.');
+  const url = API + '/models/' + encodeURIComponent(model) + (stream ? ':streamGenerateContent?alt=sse' : ':generateContent');
   let res;
   try {
-    res = await fetch(API + '/models/' + encodeURIComponent(model) + ':streamGenerateContent?alt=sse', {
-      method:'POST', headers:{ 'Content-Type':'application/json', 'x-goog-api-key': S.apiKey }, body: JSON.stringify(body), signal: ctl.signal
-    });
-  } catch (e) {
-    clearTimeout(timer);
-    if (timedOut) throw timeoutErr();
-    throw mkErr('network', 'Mất kết nối tới Google' + detail(e) + '. Kiểm tra mạng rồi bấm Thử lại.');
-  }
-  if (!res.ok){ clearTimeout(timer); const data = await res.json().catch(() => ({})); throw apiError(res.status, data); }
+    res = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json', 'x-goog-api-key': key }, body: JSON.stringify(body), signal: ctl.signal });
+  } catch (e) { done(); throw failErr(e, 'Mất kết nối tới Google'); }
+  if (!res.ok){ done(); const data = await res.json().catch(() => ({})); throw apiError(res.status, data); }
 
+  /* Nhận một lần (không stream) */
+  if (!stream){
+    let data;
+    try { data = await res.json(); } catch (e) { done(); throw failErr(e, 'Kết nối bị ngắt giữa chừng'); }
+    done();
+    const c = data.candidates && data.candidates[0];
+    const t = c ? ((c.content && c.content.parts) || []).filter(p => p.text && !p.thought).map(p => p.text).join('') : '';
+    if (!t.trim()){
+      if ((data.promptFeedback && data.promptFeedback.blockReason) || (c && c.finishReason === 'SAFETY')) throw mkErr('blocked', 'Google chặn câu này vì lý do an toàn nội dung. Thử nói theo cách khác nhé.');
+      throw mkErr('empty', 'UFO chưa trả lời được. Bấm Thử lại nhé.');
+    }
+    const d = parseJSON(t);
+    if (d && d.reply && opts.onReply) opts.onReply(String(d.reply).trim());
+    return d;
+  }
+
+  /* Nhận dần (stream) */
   let full = '', buf = '', finish = '', blocked = '', earlyReply = '';
   const handle = line => {
     line = line.trim();
     if (!line.startsWith('data:')) return;
+    gotData = true;
     let j; try { j = JSON.parse(line.slice(5)); } catch (e) { return; }
     if (j.promptFeedback && j.promptFeedback.blockReason) blocked = j.promptFeedback.blockReason;
     const c = j.candidates && j.candidates[0];
@@ -673,12 +709,11 @@ async function gemini(contents, opts){
       (await res.text()).split('\n').forEach(handle);
     }
   } catch (e) {
-    clearTimeout(timer);
+    done();
     if (earlyReply) return { reply: earlyReply };   // đã có câu nói của UFO: giữ lại, bỏ phần gợi ý
-    if (timedOut) throw timeoutErr();
-    throw mkErr('network', 'Kết nối bị ngắt giữa chừng' + detail(e) + '. Bấm Thử lại.');
+    throw failErr(e, 'Kết nối bị ngắt giữa chừng');
   }
-  clearTimeout(timer);
+  done();
   if (!full.trim()){
     if (blocked || finish === 'SAFETY') throw mkErr('blocked', 'Google chặn câu này vì lý do an toàn nội dung. Thử nói theo cách khác nhé.');
     throw mkErr('empty', 'UFO chưa trả lời được. Bấm Thử lại nhé.');
@@ -701,11 +736,23 @@ async function listModels(key){
 function pickBest(list){
   const ids = list.map(m => m.id);
   if (ids.includes('gemini-flash-latest')) return 'gemini-flash-latest';
-  const ver = id => parseFloat((id.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || 0);
-  const pool = ids.filter(id => /flash/.test(id) && !/lite|preview|exp|thinking|8b/.test(id)).sort((a, b) => ver(b) - ver(a));
+  const pool = ids.filter(id => /flash/.test(id) && !/lite|preview|exp|thinking|8b/.test(id)).sort((a, b) => verOf(b) - verOf(a));
   if (pool.length) return pool[0];
-  const any = ids.filter(id => /flash/.test(id)).sort((a, b) => ver(b) - ver(a));
+  const any = ids.filter(id => /flash/.test(id)).sort((a, b) => verOf(b) - verOf(a));
   return any[0] || ids[0] || null;
+}
+function pickLiteFrom(list){
+  const ids = (list || []).map(m => m.id);
+  if (ids.includes('gemini-flash-lite-latest')) return 'gemini-flash-lite-latest';
+  const lites = ids.filter(id => /flash-lite/.test(id)).sort((a, b) => (/preview|exp/.test(a) - /preview|exp/.test(b)) || (verOf(b) - verOf(a)));
+  return lites[0] || (ids.length ? null : 'gemini-flash-lite-latest');
+}
+async function pickLite(){
+  if (!models.length){
+    const list = await listModels(S.apiKey).catch(() => []);
+    if (list.length){ models = list; store.set('ufo.models', list); }
+  }
+  return pickLiteFrom(models);
 }
 function normalizeReply(d){
   const s = v => typeof v === 'string' ? v.trim() : '';
@@ -740,11 +787,12 @@ const modelKey = () => S.model || 'gemini-flash-latest';
 const thinkIdx = () => { const v = S.think[modelKey()]; return typeof v === 'number' && v >= 0 && v < THINK_LADDER.length ? v : 0; };
 async function askUFO(onReply){
   const contents = buildContents();
-  let schema = true, ti = thinkIdx(), swapped = false;
-  for (let attempt = 0; attempt < 7; attempt++){
+  let schema = true, ti = thinkIdx(), swapped = false, slowSteps = 0, stream = !S.noStream;
+  for (let attempt = 0; attempt < 9; attempt++){
     try {
-      const d = await gemini(contents, { schema, think: THINK_LADDER[ti], onReply });
+      const d = await gemini(contents, { schema, think: THINK_LADDER[ti], onReply, stream });
       if (ti !== thinkIdx()){ S.think[modelKey()] = ti; saveS(); }   // nhớ cách đã chạy được cho model này
+      if (!stream && !S.noStream){ S.noStream = true; saveS(); }       // nhận một lần chạy được còn nhận dần thì không
       return d;
     } catch (e) {
       const aboutThinking = /think/i.test(e.message || '');
@@ -757,6 +805,22 @@ async function askUFO(onReply){
         const best = list && pickBest(list);
         if (best && best !== S.model){ S.model = best; saveS(); models = list; store.set('ufo.models', list); ti = thinkIdx(); continue; }
       }
+      /* Chậm: lần 1 chuyển sang model Flash-Lite, lần 2 đổi sang kiểu nhận một lần */
+      if (e.code === 'slow' && slowSteps === 0){
+        slowSteps = 1;
+        const lite = await pickLite();
+        if (lite && lite !== modelKey()){
+          S.model = lite; saveS(); ti = thinkIdx();
+          toast('Google đang chậm. UFO chuyển sang model nhanh hơn: ' + lite + '. Có thể đổi lại trong Cài đặt.', 6000);
+          continue;
+        }
+      }
+      if (e.code === 'slow' && slowSteps <= 1 && stream){
+        slowSteps = 2; stream = false;
+        toast('Vẫn chậm. UFO thử cách kết nối khác…', 5000);
+        continue;
+      }
+      if (e.code === 'slow') throw mkErr('slow', 'Google chưa trả lời sau nhiều lần thử (mỗi lần ' + Math.round(FIRST_TEXT_MS / 1000) + ' giây). Có thể mạng chậm hoặc máy chủ Google đang quá tải. Vào Cài đặt, bấm "Kiểm tra tốc độ" rồi chụp kết quả.');
       throw e;
     }
   }
@@ -790,7 +854,7 @@ function setBusy(b){
     waitStart = Date.now();
     waitTimer = setInterval(() => {
       const el = document.getElementById('waitSec');
-      if (el){ const s = Math.round((Date.now() - waitStart) / 1000); el.textContent = s >= 4 ? s + ' giây' : ''; }
+      if (el){ const s = Math.round((Date.now() - waitStart) / 1000); el.textContent = s >= 15 ? 'Google đang chậm… ' + s + ' giây' : s >= 4 ? s + ' giây' : ''; }
     }, 1000);
     if (avState !== 'speaking') setAvatar('thinking');
   } else if (avState === 'thinking') setAvatar('idle');
@@ -922,6 +986,11 @@ function renderMe(m){
 }
 function render(){
   const nodes = [];
+  if (IN_APP && !bannerClosed){
+    nodes.push(h('div', { class:'sys banner' },
+      h('div', null, 'App đang mở bên trong một ứng dụng khác (ví dụ Zalo, Messenger). Nên mở link bằng Safari hoặc Chrome để kết nối và micro ổn định hơn: bấm nút ⋯ ở góc trên, chọn mở bằng trình duyệt.'),
+      h('div', { class:'row' }, h('button', { class:'btn ghost sm', type:'button', onclick: () => { bannerClosed = true; render(); } }, 'Đã hiểu'))));
+  }
   if (!S.apiKey){ nodes.push(renderSetup()); }
   else {
     if (!chat || !chat.messages || !chat.messages.length) chat = { topic:S.topic, messages:[openingMessage()] };
@@ -939,7 +1008,8 @@ function render(){
       nodes.push(h('div', { class:'sys', role:'alert' }, h('div', null, pending.msg),
         h('div', { class:'row' },
           h('button', { class:'btn sm', type:'button', onclick: () => respond(true) }, 'Thử lại'),
-          (pending.code === 'key' || pending.code === 'model') ? h('button', { class:'btn ghost sm', type:'button', onclick: openSettings }, 'Mở cài đặt') : null)));
+          ['key', 'model', 'slow', 'timeout'].includes(pending.code) ? h('button', { class:'btn ghost sm', type:'button', onclick: openSettings }, 'Mở cài đặt') : null),
+        h('div', { class:'meta' }, 'Phiên bản ' + APP_VERSION + ' · ' + modelKey() + (S.noStream ? ' · nhận một lần' : ' · nhận dần') + (IN_APP ? ' · trong app khác' : ''))));
     }
   }
   chatEl.replaceChildren(...nodes);
@@ -1085,6 +1155,7 @@ function openSettings(){
   $('#fRate').value = S.rate; $('#rateOut').textContent = Number(S.rate).toFixed(2) + '×';
   $('#fAutoSpeak').checked = S.autoSpeak; $('#fAutoSend').checked = S.autoSend; $('#fTheme').value = S.theme;
   $('#checkMsg').className = 'help'; $('#checkMsg').textContent = MODEL_HELP;
+  $('#speedOut').hidden = true; $('#speedOut').replaceChildren();
   $('#dlgSettings').showModal();
 }
 $('#btnSettings').addEventListener('click', openSettings);
@@ -1107,6 +1178,64 @@ $('#btnCheck').addEventListener('click', async () => {
     $('#fModel').value = list.some(m => m.id === keepSel) || keepSel === 'gemini-flash-latest' ? keepSel : (pickBest(list) || keepSel);
     msg.className = 'help ok'; msg.textContent = 'Key dùng được. Tìm thấy ' + list.length + ' model trò chuyện.';
   } catch (e) { msg.className = 'help err'; msg.textContent = e.message; }
+  b.disabled = false;
+});
+
+/* Đo tốc độ: kết nối tới Google, model đang dùng (nhận dần / nhận một lần), model Flash-Lite. Tự chọn cách nhanh nhất. */
+async function pingModel(model, key, stream){
+  let ti = typeof S.think[model] === 'number' ? S.think[model] : 0;
+  const contents = [{ role:'user', parts:[{ text:'Hi UFO! I had a busy morning.' }] }];
+  for (let a = 0; a < 5; a++){
+    const t0 = performance.now(); let first = 0;
+    try {
+      await gemini(contents, { model, key, stream, schema:true, think: THINK_LADDER[ti], firstTextMs: FIRST_TEXT_MS, onReply: () => { if (!first) first = performance.now() - t0; } });
+      const total = performance.now() - t0;
+      S.think[model] = ti; saveS();
+      return { ok:true, first: first || total, total };
+    } catch (e) {
+      if (e.code === 'bad' && ti < THINK_LADDER.length - 1){ ti++; continue; }
+      return { ok:false, msg: e.code === 'slow' ? 'quá ' + Math.round(FIRST_TEXT_MS / 1000) + ' giây chưa trả lời' : e.message };
+    }
+  }
+  return { ok:false, msg:'không đo được' };
+}
+$('#btnSpeed').addEventListener('click', async () => {
+  const k = $('#fKey').value.trim(), out = $('#speedOut'), b = $('#btnSpeed');
+  out.hidden = false;
+  if (!k){ out.className = 'help err'; out.textContent = 'Hãy dán API key trước.'; return; }
+  b.disabled = true; out.className = 'help';
+  const box = h('div', { class:'speed' });
+  out.replaceChildren(h('div', null, 'Đang đo, mỗi dòng tối đa ' + Math.round(FIRST_TEXT_MS / 1000) + ' giây. Lần đo này dùng khoảng 3–4 lượt miễn phí.'), box);
+  const row = label => { const v = h('span', { class:'sm-val' }, 'đang đo…'); box.append(h('div', { class:'speed-row' }, h('span', { class:'sm-name' }, label), v)); return v; };
+  const setVal = (v, ok, text) => { v.className = 'sm-val ' + (ok ? 'ok' : 'err'); v.textContent = text; };
+
+  const v0 = row('Kết nối tới Google');
+  const t0 = performance.now();
+  let list;
+  try { list = await listModels(k); models = list; store.set('ufo.models', list); setVal(v0, true, fmtSec(performance.now() - t0)); }
+  catch (e) { setVal(v0, false, e.message); b.disabled = false; return; }
+
+  const cur = $('#fModel').value || 'gemini-flash-latest';
+  const lite = pickLiteFrom(list);
+  const tests = [{ model:cur, stream:true, label:cur + ' · nhận dần' }, { model:cur, stream:false, label:cur + ' · nhận một lần' }];
+  if (lite && lite !== cur) tests.push({ model:lite, stream:true, label:lite + ' · nhận dần' });
+  const results = [];
+  for (const t of tests){
+    const v = row(t.label);
+    const r = await pingModel(t.model, k, t.stream);
+    results.push(Object.assign({}, t, r));
+    setVal(v, r.ok, r.ok ? 'câu đầu sau ' + fmtSec(r.first) : r.msg);
+  }
+  const ok = results.filter(r => r.ok).sort((a, b) => a.first - b.first);
+  if (ok.length){
+    const best = ok[0];
+    S.model = best.model; S.noStream = !best.stream; saveS();
+    fillModels();
+    box.append(h('div', { class:'ok' }, 'Đã chuyển sang cách nhanh nhất: ' + best.model + (best.stream ? ' · nhận dần' : ' · nhận một lần') + '.'));
+  } else {
+    box.append(h('div', { class:'err' }, 'Không cách nào trả lời được trong ' + Math.round(FIRST_TEXT_MS / 1000) + ' giây. Có thể mạng đang chậm hoặc key đã hết lượt miễn phí. Chụp màn hình này gửi lại để kiểm tra.'));
+  }
+  box.append(h('div', { class:'meta' }, 'Phiên bản ' + APP_VERSION + (IN_APP ? ' · đang mở trong app khác' : '')));
   b.disabled = false;
 });
 $('#btnSave').addEventListener('click', () => {
