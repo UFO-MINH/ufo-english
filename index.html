@@ -124,11 +124,15 @@ button{font:inherit;color:inherit}
 .fix ins{color:var(--good);text-decoration:none;font-weight:600}
 .fix p{margin:0;font-size:13.5px;color:var(--muted)}
 .fix .acts{margin-top:2px}
-.sys{align-self:center;max-width:94%;background:var(--accent-soft);border-radius:14px;padding:10px 14px;font-size:14px;display:flex;flex-direction:column;gap:8px}
+.sys{align-self:center;max-width:94%;background:var(--accent-soft);border-radius:14px;padding:10px 14px;font-size:14px;display:flex;flex-direction:column;gap:8px;overflow-wrap:anywhere}
 .sys .row{display:flex;gap:8px;flex-wrap:wrap}
 .typing{display:inline-flex;gap:5px;padding:4px 2px}
 .typing i{width:7px;height:7px;border-radius:50%;background:var(--muted);animation:dot 1s infinite ease-in-out}
 .typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
+.bubble.wait{display:flex;align-items:center;gap:10px}
+.wait-sec{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.wait-note{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12.5px;color:var(--muted)}
+.wait-note .typing i{width:5px;height:5px}
 @keyframes dot{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}
 
 /* ---------- Thẻ cài đặt lần đầu ---------- */
@@ -268,7 +272,7 @@ dialog.dlg::backdrop{background:rgb(8 16 26 / .5)}
     <div class="field">
       <label for="fModel">Model</label>
       <div class="inline"><select id="fModel" style="flex:1;min-width:0"></select><button class="btn ghost sm" type="button" id="btnCheck">Kiểm tra key</button></div>
-      <div class="help" id="checkMsg">Để mặc định "gemini-flash-latest" là được: Google tự cập nhật bản Flash mới nhất.</div>
+      <div class="help" id="checkMsg"></div>
     </div>
 
     <p class="section-title">Cách xưng hô</p>
@@ -300,6 +304,7 @@ dialog.dlg::backdrop{background:rgb(8 16 26 / .5)}
       <li>Mở link của app bằng Chrome (Android) hoặc Safari (iPhone).</li>
       <li>Mở menu chia sẻ hoặc menu ⋮, chọn <b>Thêm vào màn hình chính</b>.</li>
       <li>Lần đầu bấm micro, chọn <b>Cho phép</b> dùng micro.</li>
+      <li>Trong lúc chờ UFO trả lời, giữ app mở, không khoá màn hình.</li>
     </ol>
     <p class="note">Lưu ý: với gói miễn phí, Google có thể dùng nội dung trò chuyện để cải thiện sản phẩm. Không nên nhắc thông tin nội bộ công ty (giá, khách hàng, số liệu) khi luyện với UFO.</p>
   </div>
@@ -402,6 +407,7 @@ function toast(msg, ms){
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, ms || 3800);
 }
 function mkErr(code, msg){ const e = new Error(msg); e.code = code; return e; }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /* ================= Dữ liệu cố định ================= */
 const LEVELS = {
@@ -436,18 +442,23 @@ const TOPICS = {
       sugg:[{en:'I work in operations at a restaurant company.', vi:'Tôi làm mảng vận hành ở một công ty nhà hàng.'},{en:"I've been in this job for three years.", vi:'Tôi đã làm công việc này được ba năm.'}] } }
 };
 const DEFAULTS = { apiKey:'', model:'gemini-flash-latest', name:'', addr:'anh', self:'em', level:'basic', topic:'free',
-  voiceURI:'', rate:0.95, autoSpeak:true, autoSend:true, showVi:'tap', theme:'auto' };
+  voiceURI:'', rate:0.95, autoSpeak:true, autoSend:true, showVi:'tap', theme:'auto', think:{} };
 const API = 'https://generativelanguage.googleapis.com/v1beta';
-const MAX_MSGS = 80, HISTORY_TURNS = 24;
+const MAX_MSGS = 80, HISTORY_TURNS = 16, TIMEOUT_MS = 50000;
+const MODEL_HELP = 'Để mặc định "gemini-flash-latest" là được. Nếu UFO vẫn trả lời chậm, chọn model có chữ Flash-Lite: nhanh hơn, câu trả lời đơn giản hơn.';
+/* Các cách giảm "suy nghĩ" của Gemini, thử lần lượt vì mỗi đời model nhận một kiểu khác nhau */
+const THINK_LADDER = [{ thinkingLevel:'minimal' }, { thinkingLevel:'low' }, { thinkingBudget:0 }, null];
 
 /* ================= Trạng thái ================= */
 let S = Object.assign({}, DEFAULTS, store.get('ufo.settings', {}));
 if (!LEVELS[S.level]) S.level = 'basic';
 if (!TOPICS[S.topic]) S.topic = 'free';
+if (!S.think || typeof S.think !== 'object') S.think = {};
 let chat = store.get('ufo.chat', null);
 let words = store.get('ufo.words', []);
 let models = store.get('ufo.models', []);
 let busy = false, pending = null, micLang = 'en', viOpen = new Set();
+let streamReply = '', waitStart = 0, waitTimer = null;
 const saveS = () => store.set('ufo.settings', S);
 const saveChat = () => store.set('ufo.chat', chat);
 const saveWords = () => store.set('ufo.words', words);
@@ -572,7 +583,7 @@ function systemPrompt(){
     'In Vietnamese text, UFO calls herself "' + S.self + '" and addresses the learner as "' + S.addr + '"' + (S.name ? ' (the learner\'s name is ' + S.name + ')' : '') + '.',
     'LEVEL: ' + L.guide,
     'SCENARIO: ' + T.guide,
-    'Always answer with one JSON object with these fields:',
+    'Always answer with one JSON object with these fields, in this order:',
     '- "reply": what UFO says out loud, in English only. Short and natural for speaking. React to what the learner said, then usually ask one question so the conversation keeps going. No emoji, no markdown, no lists.',
     '- "reply_vi": a natural Vietnamese translation of "reply".',
     '- "correction": check ONLY the learner\'s latest message. The learner often speaks through speech recognition, so ignore capitalization, punctuation and words that were obviously mis-heard. Set has_error to true only for real grammar mistakes, wrong word choice or clearly unnatural English. "corrected" is the natural way to say the whole sentence in English. "explain_vi" explains the mistake in one or two short, kind Vietnamese sentences. If the learner used Vietnamese (fully or mixed), set has_error to true, copy their words into "original", put the natural English in "corrected", and write explain_vi like "Câu này tiếng Anh nói là: ...". If there is no error, has_error is false and the other three fields are empty strings.',
@@ -591,7 +602,7 @@ function apiError(status, data){
   if (status === 401 || status === 403) return mkErr('key', 'API key chưa được phép dùng Gemini. Thử tạo key mới trong Google AI Studio. (' + msg + ')');
   if (status === 404) return mkErr('model', 'Không tìm thấy model "' + S.model + '". Mở Cài đặt, bấm "Kiểm tra key" rồi chọn model khác.');
   if (status === 429) return mkErr('quota', 'Đã dùng hết lượt miễn phí tạm thời. Đợi khoảng 1 phút rồi bấm Thử lại. Nếu vẫn báo lỗi này, có thể đã hết lượt trong ngày.');
-  if (status >= 500) return mkErr('server', 'Máy chủ Google đang bận. Đợi vài giây rồi bấm Thử lại.');
+  if (status >= 500) return mkErr('server', 'Máy chủ Google đang bận (lỗi ' + status + '). Đợi vài giây rồi bấm Thử lại.');
   return mkErr('other', 'Lỗi ' + status + (msg ? ': ' + msg : ''));
 }
 function parseJSON(text){
@@ -603,26 +614,78 @@ function parseJSON(text){
   if (a >= 0 && b > a){ try { return JSON.parse(t.slice(a, b + 1)); } catch (e) {} }
   return { reply: t };
 }
-async function gemini(contents, useSchema){
+/* Gọi Gemini dạng "stream" (nhận chữ dần dần): câu nói của UFO nằm đầu JSON nên hiện và đọc được ngay,
+   phần sửa lỗi / gợi ý / từ mới về sau. opts = { schema, think, onReply } */
+async function gemini(contents, opts){
   const model = (S.model || 'gemini-flash-latest').replace(/^models\//, '');
-  const body = {
-    systemInstruction:{ parts:[{ text: systemPrompt() }] },
-    contents,
-    generationConfig: Object.assign({ temperature:0.8, responseMimeType:'application/json' }, useSchema ? { responseSchema: SCHEMA } : {})
-  };
+  const gc = { temperature:0.8, responseMimeType:'application/json' };
+  if (opts.schema) gc.responseSchema = SCHEMA;
+  if (opts.think) gc.thinkingConfig = opts.think;
+  const body = { systemInstruction:{ parts:[{ text: systemPrompt() }] }, contents, generationConfig: gc };
+  const ctl = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, TIMEOUT_MS);
+  const t0 = Date.now();
+  const detail = e => ' (sau ' + Math.round((Date.now() - t0) / 1000) + ' giây' + (e && e.message ? ' · ' + e.message : '') + ')';
+  const timeoutErr = () => mkErr('timeout', 'Google phản hồi quá lâu (hơn ' + Math.round(TIMEOUT_MS / 1000) + ' giây). Bấm Thử lại. Nếu lặp lại nhiều lần, vào Cài đặt chọn model có chữ Flash-Lite.');
   let res;
   try {
-    res = await fetch(API + '/models/' + encodeURIComponent(model) + ':generateContent', {
-      method:'POST', headers:{ 'Content-Type':'application/json', 'x-goog-api-key': S.apiKey }, body: JSON.stringify(body)
+    res = await fetch(API + '/models/' + encodeURIComponent(model) + ':streamGenerateContent?alt=sse', {
+      method:'POST', headers:{ 'Content-Type':'application/json', 'x-goog-api-key': S.apiKey }, body: JSON.stringify(body), signal: ctl.signal
     });
-  } catch (e) { throw mkErr('network', 'Không kết nối được tới Google. Kiểm tra internet rồi bấm Thử lại.'); }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw apiError(res.status, data);
-  const cand = data.candidates && data.candidates[0];
-  if (!cand) throw mkErr('blocked', 'Google chặn câu này vì lý do an toàn nội dung. Thử nói theo cách khác nhé.');
-  const text = ((cand.content && cand.content.parts) || []).filter(p => p.text && !p.thought).map(p => p.text).join('');
-  if (!text.trim()) throw mkErr(cand.finishReason === 'SAFETY' ? 'blocked' : 'empty', cand.finishReason === 'SAFETY' ? 'Google chặn câu trả lời vì lý do an toàn nội dung. Thử nói theo cách khác nhé.' : 'UFO chưa trả lời được. Bấm Thử lại nhé.');
-  return parseJSON(text);
+  } catch (e) {
+    clearTimeout(timer);
+    if (timedOut) throw timeoutErr();
+    throw mkErr('network', 'Mất kết nối tới Google' + detail(e) + '. Kiểm tra mạng rồi bấm Thử lại.');
+  }
+  if (!res.ok){ clearTimeout(timer); const data = await res.json().catch(() => ({})); throw apiError(res.status, data); }
+
+  let full = '', buf = '', finish = '', blocked = '', earlyReply = '';
+  const handle = line => {
+    line = line.trim();
+    if (!line.startsWith('data:')) return;
+    let j; try { j = JSON.parse(line.slice(5)); } catch (e) { return; }
+    if (j.promptFeedback && j.promptFeedback.blockReason) blocked = j.promptFeedback.blockReason;
+    const c = j.candidates && j.candidates[0];
+    if (!c) return;
+    if (c.finishReason) finish = c.finishReason;
+    const t = ((c.content && c.content.parts) || []).filter(p => p.text && !p.thought).map(p => p.text).join('');
+    if (!t) return;
+    full += t;
+    if (!earlyReply){
+      const m = full.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      if (m){ try { earlyReply = JSON.parse('"' + m[1] + '"').trim(); } catch (e) {} if (earlyReply && opts.onReply) opts.onReply(earlyReply); }
+    }
+  };
+  try {
+    if (res.body && res.body.getReader){
+      const reader = res.body.getReader(), dec = new TextDecoder();
+      for (;;){
+        const r = await reader.read();
+        if (r.done) break;
+        buf += dec.decode(r.value, { stream:true });
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0){ handle(buf.slice(0, i)); buf = buf.slice(i + 1); }
+      }
+      buf += dec.decode();
+      if (buf) handle(buf);
+    } else {
+      (await res.text()).split('\n').forEach(handle);
+    }
+  } catch (e) {
+    clearTimeout(timer);
+    if (earlyReply) return { reply: earlyReply };   // đã có câu nói của UFO: giữ lại, bỏ phần gợi ý
+    if (timedOut) throw timeoutErr();
+    throw mkErr('network', 'Kết nối bị ngắt giữa chừng' + detail(e) + '. Bấm Thử lại.');
+  }
+  clearTimeout(timer);
+  if (!full.trim()){
+    if (blocked || finish === 'SAFETY') throw mkErr('blocked', 'Google chặn câu này vì lý do an toàn nội dung. Thử nói theo cách khác nhé.');
+    throw mkErr('empty', 'UFO chưa trả lời được. Bấm Thử lại nhé.');
+  }
+  const d = parseJSON(full);
+  if ((!d || !d.reply) && earlyReply) return { reply: earlyReply };
+  return d;
 }
 async function listModels(key){
   let res;
@@ -658,9 +721,10 @@ function normalizeReply(d){
     new_words: (Array.isArray(d && d.new_words) ? d.new_words : []).filter(x => x && s(x.word)).slice(0, 3).map(x => ({ word: s(x.word), ipa: s(x.ipa), vi: s(x.vi) }))
   };
 }
+/* Lịch sử gửi kèm chỉ giữ câu nói của UFO (không gửi lại gợi ý, từ mới) cho gọn và nhanh */
 function buildContents(){
   const turns = chat.messages.map(m => m.role === 'ufo'
-    ? { role:'model', text: JSON.stringify(m.data || { reply: m.text }) }
+    ? { role:'model', text: JSON.stringify({ reply: (m.data && m.data.reply) || m.text }) }
     : { role:'user', text: m.text });
   let recent = turns.slice(-HISTORY_TURNS);
   if (!recent.length || recent[0].role !== 'user') recent.unshift({ role:'user', text:'(The lesson starts now. Please greet me.)' });
@@ -672,18 +736,31 @@ function buildContents(){
   }
   return merged;
 }
-async function askUFO(){
+const modelKey = () => S.model || 'gemini-flash-latest';
+const thinkIdx = () => { const v = S.think[modelKey()]; return typeof v === 'number' && v >= 0 && v < THINK_LADDER.length ? v : 0; };
+async function askUFO(onReply){
   const contents = buildContents();
-  try { return await gemini(contents, true); }
-  catch (e) {
-    if (e.code === 'model'){
-      const list = await listModels(S.apiKey).catch(() => null);
-      const best = list && pickBest(list);
-      if (best && best !== S.model){ S.model = best; saveS(); models = list; store.set('ufo.models', list); return await gemini(contents, true); }
+  let schema = true, ti = thinkIdx(), swapped = false;
+  for (let attempt = 0; attempt < 7; attempt++){
+    try {
+      const d = await gemini(contents, { schema, think: THINK_LADDER[ti], onReply });
+      if (ti !== thinkIdx()){ S.think[modelKey()] = ti; saveS(); }   // nhớ cách đã chạy được cho model này
+      return d;
+    } catch (e) {
+      const aboutThinking = /think/i.test(e.message || '');
+      if (e.code === 'bad' && aboutThinking && ti < THINK_LADDER.length - 1){ ti++; continue; }
+      if (e.code === 'bad' && schema && !aboutThinking){ schema = false; continue; }
+      if (e.code === 'bad' && ti < THINK_LADDER.length - 1){ ti++; continue; }
+      if (e.code === 'model' && !swapped){
+        swapped = true;
+        const list = await listModels(S.apiKey).catch(() => null);
+        const best = list && pickBest(list);
+        if (best && best !== S.model){ S.model = best; saveS(); models = list; store.set('ufo.models', list); ti = thinkIdx(); continue; }
+      }
+      throw e;
     }
-    if (e.code === 'bad') return await gemini(contents, false);
-    throw e;
   }
+  throw mkErr('other', 'UFO chưa trả lời được. Bấm Thử lại nhé.');
 }
 
 /* ================= Hội thoại ================= */
@@ -708,7 +785,15 @@ function addWords(list){
 }
 function setBusy(b){
   busy = b; micBtn.disabled = b; sendBtn.disabled = b;
-  if (b) setAvatar('thinking'); else if (avState === 'thinking') setAvatar('idle');
+  clearInterval(waitTimer); waitTimer = null;
+  if (b){
+    waitStart = Date.now();
+    waitTimer = setInterval(() => {
+      const el = document.getElementById('waitSec');
+      if (el){ const s = Math.round((Date.now() - waitStart) / 1000); el.textContent = s >= 4 ? s + ' giây' : ''; }
+    }, 1000);
+    if (avState !== 'speaking') setAvatar('thinking');
+  } else if (avState === 'thinking') setAvatar('idle');
 }
 async function send(text){
   text = String(text || '').trim();
@@ -721,23 +806,42 @@ async function send(text){
   saveChat();
   await respond();
 }
-async function respond(){
-  pending = null; setBusy(true); render();
+async function respond(isRetry){
+  pending = null; streamReply = ''; setBusy(true); render();
+  let spoke = false;
   try {
-    const d = normalizeReply(await askUFO());
+    const raw = await askUFO(reply => {
+      streamReply = reply; render();
+      if (S.autoSpeak){ speak(reply); spoke = true; }   // đọc ngay khi có câu nói, không đợi phần gợi ý
+    });
+    const d = normalizeReply(raw);
     if (!d.reply) throw mkErr('empty', 'UFO chưa trả lời được. Bấm Thử lại nhé.');
     const me = [...chat.messages].reverse().find(m => m.role === 'me');
     if (me && d.correction.has_error) me.fix = d.correction;
     chat.messages.push({ role:'ufo', text: d.reply, data: d });
     addWords(d.new_words);
     saveChat();
-    setBusy(false); render();
-    if (S.autoSpeak) speak(d.reply);
+    streamReply = ''; setBusy(false); render();
+    if (S.autoSpeak && !spoke) speak(d.reply);
   } catch (e) {
+    streamReply = ''; setBusy(false);
+    const flaky = e.code === 'network' || e.code === 'timeout';
+    if (flaky && !isRetry && !document.hidden){
+      toast('Mạng chập chờn, UFO đang thử lại…', 2500);
+      await sleep(1200);
+      return respond(true);
+    }
     pending = { code: e.code, msg: e.message || 'Có lỗi xảy ra.' };
-    setBusy(false); render();
+    render();
   }
 }
+/* Điện thoại khoá màn hình hoặc chuyển app lúc đang chờ thì kết nối hay bị cắt: mở lại là tự thử lại */
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && !busy && pending && (pending.code === 'network' || pending.code === 'timeout')){
+    toast('UFO đang thử lại…', 2500);
+    respond(true);
+  }
+});
 
 /* ================= Vẽ khung trò chuyện ================= */
 function chipBtn(icon, label, onclick, extra){ return h('button', { class:'chip' + (extra ? ' ' + extra : ''), type:'button', onclick }, h('span', { html: icon }), label); }
@@ -823,11 +927,18 @@ function render(){
     if (!chat || !chat.messages || !chat.messages.length) chat = { topic:S.topic, messages:[openingMessage()] };
     const lastUfo = chat.messages.map(m => m.role).lastIndexOf('ufo');
     chat.messages.forEach((m, i) => nodes.push(m.role === 'ufo' ? renderUfo(m, i, i === lastUfo && i === chat.messages.length - 1) : renderMe(m)));
-    if (busy) nodes.push(h('div', { class:'msg ufo' }, h('div', { class:'bubble', 'aria-label':'UFO đang suy nghĩ' }, h('span', { class:'typing' }, h('i'), h('i'), h('i')))));
+    if (busy && streamReply){
+      nodes.push(h('div', { class:'msg ufo' }, h('div', { class:'bubble' },
+        h('p', { class:'en', lang:'en' }, streamReply),
+        h('div', { class:'wait-note' }, h('span', { class:'typing' }, h('i'), h('i'), h('i')), 'Đang chuẩn bị gợi ý và sửa lỗi…'))));
+    } else if (busy){
+      nodes.push(h('div', { class:'msg ufo' }, h('div', { class:'bubble wait', 'aria-label':'UFO đang suy nghĩ' },
+        h('span', { class:'typing' }, h('i'), h('i'), h('i')), h('span', { class:'wait-sec', id:'waitSec' }))));
+    }
     if (pending){
       nodes.push(h('div', { class:'sys', role:'alert' }, h('div', null, pending.msg),
         h('div', { class:'row' },
-          h('button', { class:'btn sm', type:'button', onclick: () => respond() }, 'Thử lại'),
+          h('button', { class:'btn sm', type:'button', onclick: () => respond(true) }, 'Thử lại'),
           (pending.code === 'key' || pending.code === 'model') ? h('button', { class:'btn ghost sm', type:'button', onclick: openSettings }, 'Mở cài đặt') : null)));
     }
   }
@@ -973,7 +1084,7 @@ function openSettings(){
   $('#fName').value = S.name; $('#fAddr').value = S.addr; $('#fSelf').value = S.self; $('#fShowVi').value = S.showVi;
   $('#fRate').value = S.rate; $('#rateOut').textContent = Number(S.rate).toFixed(2) + '×';
   $('#fAutoSpeak').checked = S.autoSpeak; $('#fAutoSend').checked = S.autoSend; $('#fTheme').value = S.theme;
-  $('#checkMsg').className = 'help'; $('#checkMsg').textContent = 'Để mặc định "gemini-flash-latest" là được: Google tự cập nhật bản Flash mới nhất.';
+  $('#checkMsg').className = 'help'; $('#checkMsg').textContent = MODEL_HELP;
   $('#dlgSettings').showModal();
 }
 $('#btnSettings').addEventListener('click', openSettings);
